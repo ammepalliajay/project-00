@@ -1,0 +1,6 @@
+{
+  "name": "Distributed Media Processing Microservice",
+  "description": "An asynchronous event-driven media processing microservice using FastAPI, Celery, RabbitMQ, Redis, Pillow, and FFmpeg for scalable image and video jobs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

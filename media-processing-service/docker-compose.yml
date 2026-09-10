@@ -1,0 +1,127 @@
+version: "3.8"
+
+services:
+  # Message Broker: RabbitMQ with Web Management UI
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: media-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"     # AMQP protocol
+      - "15672:15672"   # RabbitMQ Web Management Dashboard
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - media-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # In-Memory Cache & Job State Store: Redis
+  redis:
+    image: redis:7-alpine
+    container_name: media-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - media-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # FastAPI Web Service (Producer, Validation, Endpoints)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: media-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-local}
+      - LOCAL_STORAGE_BASE_DIR=/app/storage
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-media-processing-bucket}
+      - MAX_UPLOAD_SIZE_MB=50
+      - CELERY_ALWAYS_EAGER=false
+    volumes:
+      - shared_media_storage:/app/storage
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - media-net
+
+  # Celery Worker (Consumer, Pillow & FFmpeg Execution)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: media-worker
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "-l", "info", "-c", "2", "-Q", "media_processing,celery"]
+    environment:
+      - ENVIRONMENT=production
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-local}
+      - LOCAL_STORAGE_BASE_DIR=/app/storage
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-media-processing-bucket}
+      - CELERY_ALWAYS_EAGER=false
+    volumes:
+      - shared_media_storage:/app/storage
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - media-net
+
+volumes:
+  rabbitmq_data:
+  redis_data:
+  shared_media_storage:
+
+networks:
+  media-net:
+    driver: bridge
